@@ -1,0 +1,8 @@
+# Force LF endings - the kernel is built in WSL2 and CRLF breaks both the
+# Makefile (recipe lines) and any shell helpers we add later.
+* text=auto eol=lf
+
+# Windows-native files keep CRLF.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf

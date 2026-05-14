@@ -1,0 +1,11 @@
+# Help the IDE's clangd find kernel headers when browsing the tree.
+# The real build uses the x86_64-elf cross-compiler invoked from the Makefile.
+CompileFlags:
+  Add:
+    - -ffreestanding
+    - -Ikernel/include
+    - -std=c11
+    - -Wno-unknown-pragmas
+Diagnostics:
+  Suppress:
+    - pp_file_not_found
