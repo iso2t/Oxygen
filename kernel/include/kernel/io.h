@@ -13,4 +13,10 @@ static inline uint8_t inb(uint16_t port) {
     return v;
 }
 
+/* Stall ~1 us by bouncing a byte off an unused I/O port. Required after
+ * 8259/8254 command writes on old chipsets; harmless on modern ones. */
+static inline void io_wait(void) {
+    __asm__ volatile ("outb %%al, $0x80" :: "a"((uint8_t)0));
+}
+
 #endif

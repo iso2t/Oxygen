@@ -8,6 +8,7 @@ OUTPUT_ARCH(i386:x86-64)
 
 SECTIONS {
     . = 1M;
+    __kernel_start = .;
 
     /* The multiboot2 header must live within the first 32 KiB of the
      * file, so we place it first. */
@@ -43,6 +44,8 @@ SECTIONS {
         . = ALIGN(4);
         __bss_end = .;
     }
+
+    __kernel_end = .;
 
     /DISCARD/ : {
         *(.eh_frame)

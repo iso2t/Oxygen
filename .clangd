@@ -1,9 +1,18 @@
-# Project-wide IDE-only config. See kernel/.clangd for include paths.
+# IDE-only (clangd). Real build is the Makefile + cross-compiler.
+# `-target x86_64-elf` matters: without it, clangd uses Windows host types
+# where `long` is 32-bit, so it mis-flags `%lx` against our 64-bit uintptr_t.
+# `-I` is absolute because clangd resolves -I relative to each source file.
 CompileFlags:
   Add:
     - -xc
     - -std=c11
+    - -target
+    - x86_64-elf
     - -ffreestanding
+    - -IF:/Oxygen/kernel/include
 Diagnostics:
   Suppress:
     - drv_argument_not_allowed_with
+    # We declare memset/etc in string.h and implement in string.c -
+    # clangd thinks the include isn't used in the .c file.
+    - unused-includes
