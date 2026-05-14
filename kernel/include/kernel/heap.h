@@ -14,4 +14,7 @@ void *kmalloc(size_t size);
 /* Releases a block previously returned by kmalloc(). NULL is a no-op. */
 void kfree(void *ptr);
 
+/* Print a one-line summary of heap occupancy. */
+void heap_dump(void);
+
 #endif

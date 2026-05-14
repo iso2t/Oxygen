@@ -17,6 +17,7 @@
 #include "kernel/pmm.h"
 #include "kernel/string.h"
 #include "kernel/panic.h"
+#include "kernel/kprintf.h"
 
 #define HEAP_VIRT_BASE     0xC000000000UL          /* 768 GiB into VA space */
 #define HEAP_INITIAL_SIZE  (1UL * 1024 * 1024)     /* 1 MiB */
@@ -122,4 +123,21 @@ void kfree(void *p) {
             b->next->prev = b->prev;
         }
     }
+}
+
+void heap_dump(void) {
+    size_t used = 0, freebytes = 0, largest = 0;
+    size_t n_used = 0, n_free = 0;
+    for (struct block *b = heap_head; b; b = b->next) {
+        if (b->is_free) {
+            freebytes += b->size;
+            n_free++;
+            if (b->size > largest) largest = b->size;
+        } else {
+            used += b->size;
+            n_used++;
+        }
+    }
+    kprintf("heap: %zu B used (%zu blocks), %zu B free (%zu blocks, largest %zu B)\n",
+            used, n_used, freebytes, n_free, largest);
 }

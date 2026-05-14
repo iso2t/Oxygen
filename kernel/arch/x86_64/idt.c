@@ -42,6 +42,10 @@ static void idt_set_gate(uint8_t vector, uint64_t handler,
     e->reserved    = 0;
 }
 
+void idt_set_ist(uint8_t vector, uint8_t ist) {
+    idt[vector].ist = (uint8_t)(ist & 0x7);
+}
+
 void idt_init(void) {
     for (int v = 0; v < 48; v++) {
         idt_set_gate((uint8_t)v, (uint64_t)isr_stubs[v], 0, IDT_TYPE_INT_GATE);

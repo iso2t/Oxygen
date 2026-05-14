@@ -27,6 +27,10 @@ struct interrupt_frame {
 
 void idt_init(void);
 
+/* Override the IST index for a single vector after idt_init. `ist` is
+ * 0 (use current stack) or 1..7 (use TSS.IST<n>). */
+void idt_set_ist(uint8_t vector, uint8_t ist);
+
 /* Called from isr_common in isr.S. */
 void exception_handler(struct interrupt_frame *frame);
 

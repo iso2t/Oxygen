@@ -11,6 +11,7 @@
 #include "kernel/io.h"
 #include "kernel/irq.h"
 #include "kernel/pic.h"
+#include "kernel/thread.h"
 
 #define PIT_FREQ_HZ   1193182u
 #define PIT_CH0_PORT  0x40
@@ -21,6 +22,7 @@ static volatile uint64_t tick_count;
 static void pit_isr(struct interrupt_frame *f) {
     (void)f;
     tick_count++;
+    schedule();   /* preemption point */
 }
 
 void pit_init(uint32_t hz) {

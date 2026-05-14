@@ -33,11 +33,14 @@ void interrupt_dispatch(struct interrupt_frame *f) {
 
     if (f->vector < 48) {
         int irq = (int)f->vector - 32;
+        /* Send EOI *before* the handler. If the handler context-switches
+         * (e.g. the PIT handler calls schedule()), control never returns
+         * to this dispatch frame; without an early EOI the PIC would
+         * latch the line and stop delivering further IRQs of this kind. */
+        pic_send_eoi((uint8_t)irq);
         if (irq_handlers[irq]) {
             irq_handlers[irq](f);
         }
-        /* EOI must follow even unhandled IRQs or the PIC stops delivering. */
-        pic_send_eoi((uint8_t)irq);
         return;
     }
 

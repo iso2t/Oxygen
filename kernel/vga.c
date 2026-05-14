@@ -50,6 +50,14 @@ void vga_putc(char c) {
         vga_newline();
         return;
     }
+    if (c == '\b') {
+        /* Non-destructive backspace - move the cursor; the caller is
+         * responsible for overwriting (the classic "\b \b" sequence). */
+        if (cursor_col > 0) {
+            cursor_col--;
+        }
+        return;
+    }
     VGA_BUFFER[cursor_row * VGA_WIDTH + cursor_col] = vga_entry(c, cursor_color);
     if (++cursor_col == VGA_WIDTH) {
         vga_newline();
