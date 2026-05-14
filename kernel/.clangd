@@ -1,0 +1,9 @@
+# IDE-only — kernel-scoped clangd config. The real build is the Makefile.
+# This file sits inside kernel/ so `-Iinclude` resolves to kernel/include
+# regardless of which source file clangd is editing.
+CompileFlags:
+  Add:
+    - -xc
+    - -std=c11
+    - -ffreestanding
+    - -Iinclude
