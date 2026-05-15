@@ -2,7 +2,11 @@
 
 #define VGA_WIDTH   80
 #define VGA_HEIGHT  25
-#define VGA_BUFFER  ((volatile uint16_t *)0xB8000)
+/* Use the high-half mapping (KERNEL_VIRT_BASE + 0xB8000) rather than the
+ * low identity address. Per-process page tables share the kernel upper
+ * half but may not share PML4[0], so writes via the high-half mapping
+ * keep working across a CR3 swap into a user PML4. */
+#define VGA_BUFFER  ((volatile uint16_t *)0xFFFFFFFF800B8000UL)
 
 static size_t  cursor_row;
 static size_t  cursor_col;

@@ -1,21 +1,18 @@
 /*
- * Oxygen kernel - TSS + GDT (x86_64).
+ * Oxygen kernel - GDT + TSS (x86_64).
  *
- * In long mode the TSS is mostly vestigial - segmentation is bypassed -
- * but two things still matter:
+ * GDT layout (after this commit, post-userspace bring-up):
+ *   index 0:   null
+ *   index 1:   kernel code     (selector 0x08; matches boot.S so CS stays valid)
+ *   index 2:   kernel data     (selector 0x10; needed for SS after syscall)
+ *   index 3:   user data       (selector 0x18; usermode uses 0x1B)
+ *   index 4:   user code       (selector 0x20; usermode uses 0x23)
+ *   index 5-6: TSS descriptor  (16 bytes; selector 0x28)
  *
- *   1. RSP0  - the stack the CPU switches to on a ring-3 -> ring-0
- *              transition (interrupt / syscall from userspace). Not
- *              used yet, but set up so userspace later "just works."
- *   2. IST1..7 - alternate stacks the CPU switches to when an interrupt
- *              vector's IST field is non-zero. The classic use is the
- *              double-fault handler: if the regular stack is corrupt
- *              (overflow, bad RSP), without an IST stack the CPU faults
- *              again pushing the exception frame and triple-faults. With
- *              IST1 pointing at a known-good page, we get a real dump.
- *
- * boot.S left us with a tiny GDT (null + kcode); we replace it here
- * with one that also contains a 64-bit TSS descriptor.
+ * The kdata/udata/ucode ordering is chosen so the syscall/sysret MSR-STAR
+ * encoding works: STAR[63:48] = 0x10 means sysret loads CS = (0x10+16)|3 = 0x23
+ * (user code) and SS = (0x10+8)|3 = 0x1B (user data). STAR[47:32] = 0x08
+ * means syscall enters with CS = 0x08 (kcode) and SS = 0x10 (kdata).
  */
 
 #include <stdint.h>
@@ -24,6 +21,17 @@
 #include "kernel/tss.h"
 #include "kernel/idt.h"
 #include "kernel/string.h"
+
+#define GDT_KCODE_SEL  0x08
+#define GDT_KDATA_SEL  0x10
+#define GDT_UDATA_SEL  0x18
+#define GDT_UCODE_SEL  0x20
+#define GDT_TSS_SEL    0x28
+
+#define DESC_KCODE  ((1ULL<<43) | (1ULL<<44) | (1ULL<<47) | (1ULL<<53))
+#define DESC_KDATA  ((1ULL<<41) | (1ULL<<44) | (1ULL<<47))
+#define DESC_UDATA  ((1ULL<<41) | (1ULL<<44) | (1ULL<<45) | (1ULL<<46) | (1ULL<<47))
+#define DESC_UCODE  ((1ULL<<43) | (1ULL<<44) | (1ULL<<45) | (1ULL<<46) | (1ULL<<47) | (1ULL<<53))
 
 struct tss64 {
     uint32_t reserved0;
@@ -40,20 +48,11 @@ struct gdt_ptr {
     uint64_t base;
 } __attribute__((packed));
 
-/* GDT layout we're building:
- *   index 0:    null         (selector 0x00)
- *   index 1:    kernel code  (selector 0x08, matches boot.S so CS stays valid)
- *   index 2-3:  TSS descriptor, 16 bytes / 2 slots  (selector 0x10)
- */
-#define GDT_NULL_SEL   0x00
-#define GDT_KCODE_SEL  0x08
-#define GDT_TSS_SEL    0x10
-
-static uint64_t gdt[4] __attribute__((aligned(16)));
+/* 5 8-byte slots for null/kcode/kdata/udata/ucode + 2 for the TSS = 7. */
+static uint64_t gdt[7] __attribute__((aligned(16)));
 
 static struct tss64 kernel_tss __attribute__((aligned(16)));
 
-/* Dedicated stacks the CPU will switch to on IST-using exceptions. */
 __attribute__((aligned(16)))
 static uint8_t df_stack[4096];
 
@@ -61,7 +60,7 @@ static void gdt_install_tss(int idx, uintptr_t base, uint32_t limit) {
     uint64_t low = 0;
     low |= (uint64_t)(limit & 0xFFFFu);
     low |= ((uint64_t)(base & 0xFFFFFFu)) << 16;
-    low |= ((uint64_t)0x89) << 40;                       /* type: available 64-bit TSS */
+    low |= ((uint64_t)0x89) << 40;                       /* available 64-bit TSS */
     low |= ((uint64_t)((limit >> 16) & 0xFu)) << 48;
     low |= ((uint64_t)((base  >> 24) & 0xFFu)) << 56;
     gdt[idx]     = low;
@@ -74,11 +73,12 @@ void tss_init(void) {
         (uint64_t)(uintptr_t)(df_stack + sizeof(df_stack));
     kernel_tss.iomap_base = sizeof(kernel_tss);          /* no I/O permission map */
 
-    /* Match boot.S's kernel-code descriptor verbatim so CS keeps working
-     * across the lgdt. */
     gdt[0] = 0;
-    gdt[1] = (1ULL << 43) | (1ULL << 44) | (1ULL << 47) | (1ULL << 53);
-    gdt_install_tss(2, (uintptr_t)&kernel_tss, sizeof(kernel_tss) - 1);
+    gdt[1] = DESC_KCODE;
+    gdt[2] = DESC_KDATA;
+    gdt[3] = DESC_UDATA;
+    gdt[4] = DESC_UCODE;
+    gdt_install_tss(5, (uintptr_t)&kernel_tss, sizeof(kernel_tss) - 1);
 
     struct gdt_ptr ptr = {
         .limit = (uint16_t)(sizeof(gdt) - 1),
@@ -87,7 +87,9 @@ void tss_init(void) {
     __asm__ volatile ("lgdt %0" :: "m"(ptr) : "memory");
     __asm__ volatile ("ltr  %w0" :: "r"((uint16_t)GDT_TSS_SEL));
 
-    /* Route #DF through IST1 so a corrupt-stack double fault still gets
-     * a real exception dump. */
     idt_set_ist(8, IST_DOUBLE_FAULT);
+}
+
+void tss_set_rsp0(uintptr_t rsp) {
+    kernel_tss.rsp[0] = rsp;
 }

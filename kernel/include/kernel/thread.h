@@ -23,4 +23,9 @@ __attribute__((noreturn)) void thread_exit(void);
 /* Print one line per known thread (tid, state, name). */
 void thread_dump(void);
 
+/* Top of the currently-running thread's kernel stack. Used by userspace
+ * setup to point TSS.RSP0 / cpu_local.kernel_rsp at a safe stack for
+ * ring-3 -> ring-0 transitions. */
+uintptr_t thread_kstack_top(void);
+
 #endif

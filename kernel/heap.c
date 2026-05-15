@@ -18,6 +18,7 @@
 #include "kernel/string.h"
 #include "kernel/panic.h"
 #include "kernel/kprintf.h"
+#include "kernel/spinlock.h"
 
 /* Upper canonical half, PML4[384] - well clear of the kernel's PML4[511].
  * Once we add userspace, kernel page tables share their upper half with
@@ -37,6 +38,7 @@ struct block {
 };
 
 static struct block *heap_head;
+static kspinlock_t   heap_lock = KSPINLOCK_INIT;
 
 void heap_init(void) {
     /* Reserve and back the entire heap range up-front. */
@@ -65,6 +67,9 @@ void *kmalloc(size_t n) {
     }
     n = (n + (HEAP_ALIGN - 1)) & ~(size_t)(HEAP_ALIGN - 1);
 
+    unsigned long _flags = kspinlock_acquire(&heap_lock);
+    void *result = NULL;
+
     for (struct block *b = heap_head; b; b = b->next) {
         if (b->magic != HEAP_MAGIC) {
             panic("kmalloc: heap corruption at %p (magic=0x%lx)",
@@ -91,9 +96,12 @@ void *kmalloc(size_t n) {
         }
 
         b->is_free = 0;
-        return (void *)((uint8_t *)b + sizeof(*b));
+        result = (void *)((uint8_t *)b + sizeof(*b));
+        break;
     }
-    return NULL;
+
+    kspinlock_release(&heap_lock, _flags);
+    return result;
 }
 
 void kfree(void *p) {
@@ -104,33 +112,39 @@ void kfree(void *p) {
     if (b->magic != HEAP_MAGIC) {
         panic("kfree: corrupt header at %p", b);
     }
+
+    unsigned long _flags = kspinlock_acquire(&heap_lock);
+
     if (b->is_free) {
+        kspinlock_release(&heap_lock, _flags);
         panic("kfree: double free at %p", b);
     }
     b->is_free = 1;
 
-    /* Merge forward. */
     if (b->next && b->next->is_free) {
         b->size += sizeof(struct block) + b->next->size;
-        b->next = b->next->next;
+        b->next  = b->next->next;
         if (b->next) {
             b->next->prev = b;
         }
     }
 
-    /* Merge backward. */
     if (b->prev && b->prev->is_free) {
         b->prev->size += sizeof(struct block) + b->size;
-        b->prev->next = b->next;
+        b->prev->next  = b->next;
         if (b->next) {
             b->next->prev = b->prev;
         }
     }
+
+    kspinlock_release(&heap_lock, _flags);
 }
 
 void heap_dump(void) {
     size_t used = 0, freebytes = 0, largest = 0;
     size_t n_used = 0, n_free = 0;
+
+    unsigned long _flags = kspinlock_acquire(&heap_lock);
     for (struct block *b = heap_head; b; b = b->next) {
         if (b->is_free) {
             freebytes += b->size;
@@ -141,6 +155,10 @@ void heap_dump(void) {
             n_used++;
         }
     }
+    kspinlock_release(&heap_lock, _flags);
+
+    /* kprintf has its own lock; calling it outside the heap lock avoids
+     * holding two locks at once. */
     kprintf("heap: %zu B used (%zu blocks), %zu B free (%zu blocks, largest %zu B)\n",
             used, n_used, freebytes, n_free, largest);
 }

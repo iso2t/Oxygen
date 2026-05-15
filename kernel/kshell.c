@@ -19,6 +19,7 @@
 #include "kernel/pit.h"
 #include "kernel/vga.h"
 #include "kernel/panic.h"
+#include "kernel/userspace.h"
 
 #define KSHELL_LINE_MAX 128
 #define KSHELL_ARGS_MAX 16
@@ -175,6 +176,17 @@ static int cmd_panic(int argc, char **argv) {
     panic("triggered by kshell");
 }
 
+static int cmd_user(int argc, char **argv) {
+    (void)argc; (void)argv;
+    int tid = kthread_create(userspace_run, NULL, "user");
+    if (tid < 0) {
+        kprintf("user: failed to spawn thread\n");
+        return -1;
+    }
+    kprintf("user: spawned ring-3 thread tid=%d\n", tid);
+    return 0;
+}
+
 static int cmd_halt(int argc, char **argv) {
     (void)argc; (void)argv;
     kprintf("halting.\n");
@@ -195,6 +207,7 @@ static const struct cmd commands[] = {
     {"echo",  cmd_echo,  "print arguments"},
     {"spawn", cmd_spawn, "spawn N counter threads (default 1)"},
     {"peek",  cmd_peek,  "read 8 bytes from a hex address"},
+    {"user",  cmd_user,  "run the first user (ring-3) program"},
     {"panic", cmd_panic, "trigger panic (testing)"},
     {"halt",  cmd_halt,  "stop the system"},
     {NULL, NULL, NULL},

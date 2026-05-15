@@ -17,12 +17,14 @@
 #include "kernel/pmm.h"
 #include "kernel/string.h"
 #include "kernel/panic.h"
+#include "kernel/spinlock.h"
 
 #define PTE_HUGE       (1ULL << 7)
 #define PTE_ADDR_MASK  0x000FFFFFFFFFF000ULL
 #define IDENTITY_BYTES (1024UL * 1024 * 1024)    /* 1 GiB */
 
-static uint64_t *kernel_pml4;
+static uint64_t   *kernel_pml4;
+static kspinlock_t vmm_lock = KSPINLOCK_INIT;
 
 static inline size_t pml4_idx(uintptr_t v) { return (v >> 39) & 0x1FF; }
 static inline size_t pdpt_idx(uintptr_t v) { return (v >> 30) & 0x1FF; }
@@ -42,7 +44,11 @@ static uint64_t *new_table(void) {
     return (uint64_t *)f;
 }
 
-/* Fetch (or optionally create) the child table referenced by parent[idx]. */
+/* Fetch (or optionally create) the child table referenced by parent[idx].
+ * Newly-created intermediates get VMM_USER set so a ring-3 walk through
+ * them succeeds when the leaf entry has VMM_USER too. The leaf's USER bit
+ * is still the deciding factor for access; setting USER on intermediates
+ * doesn't relax protection on kernel-only leaves. */
 static uint64_t *child_table(uint64_t *parent, size_t idx, int create) {
     if (parent[idx] & VMM_PRESENT) {
         return (uint64_t *)(parent[idx] & PTE_ADDR_MASK);
@@ -54,7 +60,7 @@ static uint64_t *child_table(uint64_t *parent, size_t idx, int create) {
     if (!t) {
         return NULL;
     }
-    parent[idx] = (uintptr_t)t | VMM_PRESENT | VMM_WRITABLE;
+    parent[idx] = (uintptr_t)t | VMM_PRESENT | VMM_WRITABLE | VMM_USER;
     return t;
 }
 
@@ -62,16 +68,21 @@ int vmm_map_4k(uintptr_t virt, uintptr_t phys, uint64_t flags) {
     if ((virt | phys) & 0xFFF) {
         return -1;
     }
+    unsigned long _flags = kspinlock_acquire(&vmm_lock);
+    int rc = -1;
     uint64_t *pdpt = child_table(kernel_pml4, pml4_idx(virt), 1);
-    if (!pdpt) return -1;
+    if (!pdpt) goto out;
     uint64_t *pd = child_table(pdpt, pdpt_idx(virt), 1);
-    if (!pd) return -1;
+    if (!pd) goto out;
     uint64_t *pt = child_table(pd, pd_idx(virt), 1);
-    if (!pt) return -1;
+    if (!pt) goto out;
 
     pt[pt_idx(virt)] = (phys & PTE_ADDR_MASK) | (flags & 0xFFF) | VMM_PRESENT;
     invlpg(virt);
-    return 0;
+    rc = 0;
+out:
+    kspinlock_release(&vmm_lock, _flags);
+    return rc;
 }
 
 static int map_huge_2m(uintptr_t virt, uintptr_t phys, uint64_t flags) {
@@ -90,40 +101,72 @@ static int map_huge_2m(uintptr_t virt, uintptr_t phys, uint64_t flags) {
 }
 
 int vmm_unmap_4k(uintptr_t virt) {
+    unsigned long _flags = kspinlock_acquire(&vmm_lock);
+    int rc = -1;
     uint64_t *pdpt = child_table(kernel_pml4, pml4_idx(virt), 0);
-    if (!pdpt) return -1;
+    if (!pdpt) goto out;
     uint64_t *pd = child_table(pdpt, pdpt_idx(virt), 0);
-    if (!pd) return -1;
+    if (!pd) goto out;
     uint64_t *pt = child_table(pd, pd_idx(virt), 0);
-    if (!pt) return -1;
-    if (!(pt[pt_idx(virt)] & VMM_PRESENT)) return -1;
+    if (!pt) goto out;
+    if (!(pt[pt_idx(virt)] & VMM_PRESENT)) goto out;
 
     pt[pt_idx(virt)] = 0;
     invlpg(virt);
-    return 0;
+    rc = 0;
+out:
+    kspinlock_release(&vmm_lock, _flags);
+    return rc;
 }
 
 uintptr_t vmm_translate(uintptr_t virt) {
+    unsigned long _flags = kspinlock_acquire(&vmm_lock);
+    uintptr_t result = 0;
     uint64_t *pdpt = child_table(kernel_pml4, pml4_idx(virt), 0);
-    if (!pdpt) return 0;
+    if (!pdpt) goto out;
 
     uint64_t pdpt_e = pdpt[pdpt_idx(virt)];
-    if (!(pdpt_e & VMM_PRESENT)) return 0;
-    if (pdpt_e & PTE_HUGE) {           /* 1 GiB page */
-        return (pdpt_e & PTE_ADDR_MASK) | (virt & 0x3FFFFFFFULL);
+    if (!(pdpt_e & VMM_PRESENT)) goto out;
+    if (pdpt_e & PTE_HUGE) {
+        result = (pdpt_e & PTE_ADDR_MASK) | (virt & 0x3FFFFFFFULL);
+        goto out;
     }
 
     uint64_t *pd = (uint64_t *)(pdpt_e & PTE_ADDR_MASK);
     uint64_t pd_e = pd[pd_idx(virt)];
-    if (!(pd_e & VMM_PRESENT)) return 0;
-    if (pd_e & PTE_HUGE) {             /* 2 MiB page */
-        return (pd_e & PTE_ADDR_MASK) | (virt & (VMM_HUGE_SIZE - 1));
+    if (!(pd_e & VMM_PRESENT)) goto out;
+    if (pd_e & PTE_HUGE) {
+        result = (pd_e & PTE_ADDR_MASK) | (virt & (VMM_HUGE_SIZE - 1));
+        goto out;
     }
 
     uint64_t *pt = (uint64_t *)(pd_e & PTE_ADDR_MASK);
     uint64_t pt_e = pt[pt_idx(virt)];
-    if (!(pt_e & VMM_PRESENT)) return 0;
-    return (pt_e & PTE_ADDR_MASK) | (virt & 0xFFFULL);
+    if (!(pt_e & VMM_PRESENT)) goto out;
+    result = (pt_e & PTE_ADDR_MASK) | (virt & 0xFFFULL);
+out:
+    kspinlock_release(&vmm_lock, _flags);
+    return result;
+}
+
+uint64_t *vmm_kernel_pml4(void) {
+    return kernel_pml4;
+}
+
+int vmm_map_4k_in(uint64_t *pml4, uintptr_t virt, uintptr_t phys, uint64_t flags) {
+    if ((virt | phys) & 0xFFF) {
+        return -1;
+    }
+    uint64_t *pdpt = child_table(pml4, pml4_idx(virt), 1);
+    if (!pdpt) return -1;
+    uint64_t *pd = child_table(pdpt, pdpt_idx(virt), 1);
+    if (!pd) return -1;
+    uint64_t *pt = child_table(pd, pd_idx(virt), 1);
+    if (!pt) return -1;
+
+    pt[pt_idx(virt)] = (phys & PTE_ADDR_MASK) | (flags & 0xFFF) | VMM_PRESENT;
+    /* No invlpg - this PML4 isn't current; CR3 load will flush TLB. */
+    return 0;
 }
 
 void vmm_init(void) {

@@ -14,6 +14,7 @@
 #include "kernel/thread.h"
 #include "kernel/kshell.h"
 #include "kernel/tss.h"
+#include "kernel/syscall.h"
 
 void kmain(uint32_t multiboot_info_addr) {
     vga_clear();
@@ -41,6 +42,9 @@ void kmain(uint32_t multiboot_info_addr) {
     uint16_t tr;
     __asm__ volatile ("str %0" : "=r"(tr));
     kprintf("tss:  TR=0x%x, #DF routed to IST1\n", tr);
+
+    syscall_init();
+    kprintf("syscall: EFER.SCE on, STAR/LSTAR/FMASK programmed\n");
 
     pic_remap(0x20, 0x28);
     pit_init(PIT_DEFAULT_HZ);

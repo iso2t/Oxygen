@@ -21,6 +21,7 @@
 #include "kernel/heap.h"
 #include "kernel/panic.h"
 #include "kernel/kprintf.h"
+#include "kernel/spinlock.h"
 
 #define THREAD_STACK_SIZE  (16 * 1024)
 
@@ -44,6 +45,10 @@ struct thread {
 static struct thread *current_thread;
 static struct thread *run_queue;
 static int            next_tid = 1;
+
+/* Protects rq_insert and thread_dump's traversal. NOT held by schedule() -
+ * see comment there for why. */
+static kspinlock_t    thread_lock = KSPINLOCK_INIT;
 
 /* In arch/x86_64/switch.S. */
 extern void arch_switch(uintptr_t *prev_rsp, uintptr_t next_rsp);
@@ -116,8 +121,11 @@ int kthread_create(kthread_fn_t fn, void *arg, const char *name) {
     *--p = 0;   /* r15 */
     t->rsp = (uintptr_t)p;
 
+    unsigned long _flags = kspinlock_acquire(&thread_lock);
     rq_insert(t);
-    return t->tid;
+    int tid = t->tid;
+    kspinlock_release(&thread_lock, _flags);
+    return tid;
 }
 
 static struct thread *pick_next(void) {
@@ -136,8 +144,14 @@ void schedule(void) {
         return;   /* sched_init hasn't run yet */
     }
 
-    /* Critical section: the run queue and current_thread are read/written
-     * by both the IRQ-entry caller and any manual caller. */
+    /* We deliberately don't take thread_lock here. On UP the cli below
+     * is itself the serialization (no other context can run on this CPU
+     * to mutate the run queue), and taking a real spinlock would force
+     * us to release it before arch_switch - because a newly-created
+     * thread enters via the trampoline and doesn't know about the lock,
+     * so a lock held across the switch would never be released. The
+     * SMP version of this kernel will need a per-CPU run queue plus a
+     * thread-aware lock-handoff protocol; not today's commit. */
     uint64_t flags;
     __asm__ volatile ("pushfq; popq %0; cli" : "=r"(flags) :: "memory");
 
@@ -170,12 +184,29 @@ void thread_exit(void) {
     }
 }
 
+uintptr_t thread_kstack_top(void) {
+    if (!current_thread) {
+        return 0;
+    }
+    if (current_thread->kstack_base == 0) {
+        /* Bootstrap (main) thread runs on boot.S's stack. */
+        extern uint8_t stack_top[];
+        return (uintptr_t)stack_top;
+    }
+    return current_thread->kstack_base + THREAD_STACK_SIZE;
+}
+
 void thread_dump(void) {
     if (!run_queue) {
         kprintf("threads: (none)\n");
         return;
     }
     kprintf("  tid  state    name\n");
+
+    /* Hold thread_lock across the traversal so a concurrent
+     * kthread_create can't splice in mid-walk. kprintf has its own
+     * lock; we briefly hold both (thread -> kprintf order). */
+    unsigned long _flags = kspinlock_acquire(&thread_lock);
     struct thread *t = run_queue;
     do {
         const char *state = "?";
@@ -189,4 +220,5 @@ void thread_dump(void) {
                 (t == current_thread) ? "  <- current" : "");
         t = t->next;
     } while (t != run_queue);
+    kspinlock_release(&thread_lock, _flags);
 }

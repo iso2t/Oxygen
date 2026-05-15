@@ -13,14 +13,16 @@
 #include "kernel/string.h"
 #include "kernel/multiboot2.h"
 #include "kernel/kprintf.h"
+#include "kernel/spinlock.h"
 
 #define PMM_TRACKED_BYTES (1024UL * 1024UL * 1024UL)               /* 1 GiB  */
 #define PMM_MAX_FRAMES    (PMM_TRACKED_BYTES / PMM_FRAME_SIZE)     /* 262144 */
 #define PMM_BITMAP_BYTES  (PMM_MAX_FRAMES / 8)                     /* 32 KiB */
 
-static uint8_t bitmap[PMM_BITMAP_BYTES];
-static size_t  used_count;
-static size_t  total_frames;   /* frames the allocator manages after init */
+static uint8_t     bitmap[PMM_BITMAP_BYTES];
+static size_t      used_count;
+static size_t      total_frames;   /* frames the allocator manages after init */
+static kspinlock_t pmm_lock = KSPINLOCK_INIT;
 
 /* Provided by linker.ld - physical addresses bracketing the kernel image
  * (low, regardless of where the kernel is linked virtually). */
@@ -120,6 +122,8 @@ void pmm_init(uintptr_t multiboot_info_addr) {
 }
 
 uintptr_t pmm_alloc_frame(void) {
+    unsigned long _flags = kspinlock_acquire(&pmm_lock);
+    uintptr_t result = 0;
     for (size_t byte = 0; byte < sizeof(bitmap); byte++) {
         if (bitmap[byte] == 0xFF) {
             continue;
@@ -128,11 +132,14 @@ uintptr_t pmm_alloc_frame(void) {
             if (!(bitmap[byte] & (1u << bit))) {
                 bitmap[byte] |= (uint8_t)(1u << bit);
                 used_count++;
-                return (uintptr_t)(byte * 8 + bit) * PMM_FRAME_SIZE;
+                result = (uintptr_t)(byte * 8 + bit) * PMM_FRAME_SIZE;
+                goto done;
             }
         }
     }
-    return 0;  /* OOM */
+done:
+    kspinlock_release(&pmm_lock, _flags);
+    return result;
 }
 
 void pmm_free_frame(uintptr_t addr) {
@@ -143,7 +150,9 @@ void pmm_free_frame(uintptr_t addr) {
     if (frame >= PMM_MAX_FRAMES) {
         return;
     }
+    unsigned long _flags = kspinlock_acquire(&pmm_lock);
     bit_clear(frame);
+    kspinlock_release(&pmm_lock, _flags);
 }
 
 size_t pmm_free_frames(void) {

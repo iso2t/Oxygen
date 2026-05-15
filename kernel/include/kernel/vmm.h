@@ -34,4 +34,13 @@ int vmm_unmap_4k(uintptr_t virt);
  * or 0 if it's not mapped (handles huge pages too). */
 uintptr_t vmm_translate(uintptr_t virt);
 
+/* Pointer to the kernel's PML4 - used by userspace setup to clone the
+ * upper half into a new per-process PML4. */
+uint64_t *vmm_kernel_pml4(void);
+
+/* Like vmm_map_4k but operates on the caller-supplied PML4 (a fresh
+ * per-process root). Intermediate tables get the USER bit set so a
+ * ring-3 walk succeeds when the leaf entry has it. */
+int vmm_map_4k_in(uint64_t *pml4, uintptr_t virt, uintptr_t phys, uint64_t flags);
+
 #endif
