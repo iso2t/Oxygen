@@ -33,9 +33,10 @@ void kmain(uint32_t multiboot_info_addr) {
 
     vmm_init();
     kprintf("vmm:  kernel page tables loaded\n");
+    kprintf("kernel: kmain @ %p\n", (void *)kmain);
 
     heap_init();
-    kprintf("heap: 1 MiB at %p\n", (void *)0xC000000000UL);
+    kprintf("heap: 1 MiB at %p\n", (void *)heap_init);
 
     uint16_t tr;
     __asm__ volatile ("str %0" : "=r"(tr));

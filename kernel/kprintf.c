@@ -6,6 +6,9 @@
 #include "kernel/kprintf.h"
 #include "kernel/vga.h"
 #include "kernel/uart.h"
+#include "kernel/spinlock.h"
+
+static kspinlock_t kprintf_lock = KSPINLOCK_INIT;
 
 static void kprint_putc(char c) {
     vga_putc(c);
@@ -161,9 +164,18 @@ void kvprintf(const char *fmt, va_list ap) {
     }
 }
 
-void kprintf(const char *fmt, ...) {
+void kprintf_unlocked(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     kvprintf(fmt, ap);
     va_end(ap);
+}
+
+void kprintf(const char *fmt, ...) {
+    unsigned long flags = kspinlock_acquire(&kprintf_lock);
+    va_list ap;
+    va_start(ap, fmt);
+    kvprintf(fmt, ap);
+    va_end(ap);
+    kspinlock_release(&kprintf_lock, flags);
 }

@@ -132,12 +132,23 @@ void vmm_init(void) {
         panic("vmm_init: PMM OOM allocating PML4");
     }
 
-    /* Identity-map the bottom 1 GiB with 2 MiB huge pages, mirroring
-     * what boot.S did. After we load CR3 below, everything currently
-     * executing (kernel text, data, stack, VGA buffer) stays addressable. */
+    /* Identity-map the bottom 1 GiB with 2 MiB huge pages. Keeps PMM
+     * frame access, VGA, and low MMIO addressable via their physical
+     * addresses. */
     for (uintptr_t a = 0; a < IDENTITY_BYTES; a += VMM_HUGE_SIZE) {
         if (map_huge_2m(a, a, VMM_WRITABLE) != 0) {
-            panic("vmm_init: failed to identity-map 0x%lx", a);
+            panic("vmm_init: identity map failed at 0x%lx", a);
+        }
+    }
+
+    /* Higher-half: map [KERNEL_VIRT_BASE, +1 GiB) to the same first
+     * 1 GiB physical. This is what boot.S did during bootstrap; we
+     * replicate it in our C-built tables so the running kernel keeps
+     * executing across the CR3 reload below. */
+    for (uintptr_t off = 0; off < IDENTITY_BYTES; off += VMM_HUGE_SIZE) {
+        if (map_huge_2m(KERNEL_VIRT_BASE + off, off, VMM_WRITABLE) != 0) {
+            panic("vmm_init: high-half map failed at 0x%lx",
+                  KERNEL_VIRT_BASE + off);
         }
     }
 

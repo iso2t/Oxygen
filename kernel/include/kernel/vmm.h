@@ -4,8 +4,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define VMM_PAGE_SIZE  4096
-#define VMM_HUGE_SIZE  (2UL * 1024 * 1024)
+#define VMM_PAGE_SIZE     4096
+#define VMM_HUGE_SIZE     (2UL * 1024 * 1024)
+
+/* Kernel image virtual base. Matches KERNEL_VIRT_BASE in linker.ld;
+ * keep them in sync. */
+#define KERNEL_VIRT_BASE  0xFFFFFFFF80000000UL
 
 /* Page-table entry flag bits (those we care about right now). */
 #define VMM_PRESENT    (1ULL << 0)

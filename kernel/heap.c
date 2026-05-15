@@ -19,7 +19,10 @@
 #include "kernel/panic.h"
 #include "kernel/kprintf.h"
 
-#define HEAP_VIRT_BASE     0xC000000000UL          /* 768 GiB into VA space */
+/* Upper canonical half, PML4[384] - well clear of the kernel's PML4[511].
+ * Once we add userspace, kernel page tables share their upper half with
+ * user tables, so the heap stays addressable across context switches. */
+#define HEAP_VIRT_BASE     0xFFFFC00000000000UL
 #define HEAP_INITIAL_SIZE  (1UL * 1024 * 1024)     /* 1 MiB */
 #define HEAP_MAGIC         0xC0FFEEBEEFDEAD42ULL
 #define HEAP_ALIGN         8

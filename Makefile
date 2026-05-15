@@ -31,11 +31,12 @@ ISO_DIR     := $(BUILD_DIR)/iso
 
 CFLAGS := -std=c11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie     \
           -fno-tree-loop-distribute-patterns                                  \
+          -mcmodel=kernel                                                     \
           -mno-red-zone -mno-sse -mno-sse2 -mno-mmx -mno-80387                \
           -Wall -Wextra -Werror -O2 -g                                        \
           -I$(KERNEL_DIR)/include
 
-LDFLAGS := -nostdlib -z max-page-size=0x1000 \
+LDFLAGS := -nostdlib -z max-page-size=0x1000 -z noexecstack \
            -T $(KERNEL_DIR)/arch/$(ARCH)/linker.ld
 
 C_SOURCES := $(shell find $(KERNEL_DIR) -name '*.c')

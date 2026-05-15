@@ -22,8 +22,10 @@ static uint8_t bitmap[PMM_BITMAP_BYTES];
 static size_t  used_count;
 static size_t  total_frames;   /* frames the allocator manages after init */
 
-extern uint8_t __kernel_start[];
-extern uint8_t __kernel_end[];
+/* Provided by linker.ld - physical addresses bracketing the kernel image
+ * (low, regardless of where the kernel is linked virtually). */
+extern uint8_t __kernel_phys_start[];
+extern uint8_t __kernel_phys_end[];
 
 static inline int bit_get(size_t f) {
     return (bitmap[f >> 3] >> (f & 7)) & 1;
@@ -106,11 +108,11 @@ void pmm_init(uintptr_t multiboot_info_addr) {
     }
 
     /* Re-reserve unsafe regions: below 1 MiB (BIOS / VGA / EBDA) and the
-     * kernel image itself (everything between __kernel_start/end). */
+     * kernel image itself (physical extent from linker symbols). */
     mark_range_used(0, 0x100000);
 
-    uintptr_t ks = (uintptr_t)__kernel_start;
-    uintptr_t ke = (uintptr_t)__kernel_end;
+    uintptr_t ks = (uintptr_t)__kernel_phys_start;
+    uintptr_t ke = (uintptr_t)__kernel_phys_end;
     mark_range_used(ks, ke - ks);
 
     /* Snapshot what's available to the allocator after init. */
